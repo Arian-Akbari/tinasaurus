@@ -15,19 +15,20 @@
     "write-heading-ids": "docusaurus write-heading-ids"
   },
   "dependencies": {
-    "@docusaurus/core": "3.3.2",
-    "@docusaurus/preset-classic": "3.3.2",
+    "@docusaurus/core": "^3.8.1",
+    "@docusaurus/preset-classic": "^3.8.1",
     "@mdx-js/react": "^3.1.0",
     "@tinacms/cli": "^1.10.0",
     "clsx": "^2.1.1",
     "prism-react-renderer": "^2.4.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "scheduler": "^0.23.2",
     "tinacms": "^2.8.0",
     "title": "^3.5.3"
   },
   "devDependencies": {
-    "@docusaurus/module-type-aliases": "3.3.2"
+    "@docusaurus/module-type-aliases": "^3.8.1"
   },
   "browserslist": {
     "production": [
