@@ -3,7 +3,8 @@
   "version": "0.0.0",
   "scripts": {
     "docusaurus": "docusaurus",
-    "dev": "tinacms dev -c \"docusaurus start\" ",
+    "dev": "tinacms dev --noTelemetry -w docs,blog,src/pages,config --datalayer-port 4002 -c \"docusaurus start --port 3001\" ",
+    "dev:reset": "rm -rf .tina && tinacms dev --noTelemetry -w docs,blog,src/pages,config --datalayer-port 4002 -c \"docusaurus start --port 3001\" ",
     "start": "docusaurus start",
     "build": "tinacms build && docusaurus build",
     "build-local": "tinacms build --local --skip-indexing --skip-cloud-checks && docusaurus build",
