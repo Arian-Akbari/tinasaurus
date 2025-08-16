@@ -7,12 +7,11 @@ import { YouTubeEmbedBlockTemplate } from "../src/components/YouTubeEmbed/templa
 import { MDXTemplates } from "../src/theme/template";
 import { docusaurusDate, titleFromSlug } from "../util";
 import title from "title";
+import VersionSelector from "../src/components/Admin/VersionManagement/VersionSelector";
+import VersionHeader from "../src/components/Admin/VersionManagement/VersionHeader";
 
 // Your hosting provider likely exposes this as an environment variable
-const branch =
-  process.env.VERCEL_GIT_COMMIT_REF ||
-  process.env.HEAD ||
-  "main";
+const branch = process.env.VERCEL_GIT_COMMIT_REF || process.env.HEAD || "main";
 
 const WarningIcon = (props) => {
   return (
@@ -55,8 +54,8 @@ const PostCollection = {
     defaultItem: () => {
       return {
         date: docusaurusDate(new Date()),
-      }
-    }
+      };
+    },
   },
   fields: [
     {
@@ -138,6 +137,19 @@ const DocsCollection = {
   label: "Docs",
   path: "docs",
   format: "mdx",
+  ui: {
+    itemProps: (item) => {
+      const selectedVersion =
+        typeof window !== "undefined"
+          ? localStorage.getItem("selectedDocVersion")
+          : "current";
+      const versionLabel =
+        selectedVersion === "current" ? "Latest" : `v${selectedVersion}`;
+      return {
+        label: `Docs (${versionLabel})`,
+      };
+    },
+  },
   fields: [
     {
       type: "string",
@@ -179,8 +191,8 @@ const DocLinkTemplate = {
         label: item?.label
           ? item?.label
           : item?.document
-            ? titleFromSlug(item?.document)
-            : item.name,
+          ? titleFromSlug(item?.document)
+          : item.name,
       };
     },
   },
@@ -838,8 +850,49 @@ export default defineConfig({
       publicFolder: "static",
     },
   },
+  admin: {
+    components: {
+      SidebarTop: () => {
+        return <VersionHeader />;
+      },
+    },
+  },
   schema: {
     collections: [
+      {
+        name: "version_selector",
+        label: "Version",
+        path: "config/versions",
+        format: "json",
+        ui: {
+          global: true,
+          allowedActions: {
+            create: false,
+            delete: false,
+          },
+        },
+        fields: [
+          {
+            type: "string",
+            name: "_versionSelector",
+            ui: {
+              component: () => {
+                return <VersionSelector />;
+              },
+            },
+          },
+          {
+            type: "string",
+            label: "Label",
+            name: "label",
+            required: true,
+            isTitle: true,
+            ui: {
+              component: "hidden",
+            },
+          },
+        ],
+      },
       DocsCollection,
       PostCollection,
       HomepageCollection,
