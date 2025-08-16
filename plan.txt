@@ -1,0 +1,587 @@
+Excellent! Now I understand the complete scope of the project. You want a comprehensive version management system with user authentication, role-based access control, and Oracle database integration. Let me break this down into a detailed plan.
+Ran tool
+# Complete Project Architecture & Implementation Plan
+
+## 🗄️ Database Design (Oracle)
+
+### Core Entities:
+
+```sql
+-- Users Table
+CREATE TABLE users (
+    id NUMBER PRIMARY KEY,
+    username VARCHAR2(50) UNIQUE NOT NULL,
+    password_hash VARCHAR2(255) NOT NULL,
+    first_name VARCHAR2(100) NOT NULL,
+    last_name VARCHAR2(100) NOT NULL,
+    personal_id VARCHAR2(20) UNIQUE NOT NULL,
+    email VARCHAR2(100) UNIQUE NOT NULL,
+    role VARCHAR2(20) CHECK (role IN ('Director', 'Executive', 'Administrator')) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Collections Table (for docs, blog, pages, etc.)
+CREATE TABLE collections (
+    id NUMBER PRIMARY KEY,
+    name VARCHAR2(50) UNIQUE NOT NULL, -- 'docs', 'blog', 'pages', etc.
+    display_name VARCHAR2(100) NOT NULL,
+    description VARCHAR2(500),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Versions Table (Applied to entire collections)
+CREATE TABLE versions (
+    id NUMBER PRIMARY KEY,
+    collection_id NUMBER REFERENCES collections(id),
+    version_number VARCHAR2(20) NOT NULL, -- 'v1.0.0', 'v2.1.0', etc.
+    is_published CHAR(1) CHECK (is_published IN ('Y', 'N')) DEFAULT 'N',
+    is_approved CHAR(1) CHECK (is_approved IN ('Y', 'N')) DEFAULT 'N',
+    version_notes CLOB,
+    created_by NUMBER REFERENCES users(id) NOT NULL,
+    published_by NUMBER REFERENCES users(id),
+    approved_by NUMBER REFERENCES users(id),
+    published_at TIMESTAMP,
+    approved_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(collection_id, version_number)
+);
+
+-- Content Files (Linked to specific versions)
+CREATE TABLE content_files (
+    id NUMBER PRIMARY KEY,
+    version_id NUMBER REFERENCES versions(id),
+    file_type VARCHAR2(50) NOT NULL, -- 'doc', 'blog', 'page', etc.
+    slug VARCHAR2(255) NOT NULL,
+    title VARCHAR2(500),
+    content CLOB NOT NULL,
+    metadata CLOB, -- JSON metadata
+    file_path VARCHAR2(1000),
+    last_modified_by NUMBER REFERENCES users(id),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(version_id, slug)
+);
+
+-- Audit Trail
+CREATE TABLE audit_log (
+    id NUMBER PRIMARY KEY,
+    table_name VARCHAR2(50) NOT NULL,
+    record_id NUMBER NOT NULL,
+    action VARCHAR2(20) NOT NULL, -- 'CREATE', 'UPDATE', 'DELETE', 'PUBLISH', 'APPROVE'
+    user_id NUMBER REFERENCES users(id) NOT NULL,
+    old_values CLOB,
+    new_values CLOB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- JWT Sessions (for token management)
+CREATE TABLE user_sessions (
+    id NUMBER PRIMARY KEY,
+    user_id NUMBER REFERENCES users(id),
+    token_hash VARCHAR2(255) NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+## 🏗️ Backend Architecture
+
+### 1. **Database Layer Setup**
+
+```javascript
+// config/database.js
+import oracledb from 'oracledb';
+
+export class DatabaseConnection {
+  constructor() {
+    this.config = {
+      user: process.env.ORACLE_USER,
+      password: process.env.ORACLE_PASSWORD,
+      connectString: process.env.ORACLE_CONNECTION_STRING,
+      poolMin: 2,
+      poolMax: 10,
+      poolIncrement: 1
+    };
+  }
+
+  async initialize() {
+    try {
+      await oracledb.createPool(this.config);
+      console.log('Oracle connection pool created');
+    } catch (error) {
+      console.error('Database connection failed:', error);
+      throw error;
+    }
+  }
+
+  async getConnection() {
+    return await oracledb.getConnection();
+  }
+}
+```
+
+### 2. **Authentication & Authorization**
+
+```javascript
+// services/AuthService.js
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcrypt';
+
+export class AuthService {
+  async login(username, password) {
+    const connection = await db.getConnection();
+    try {
+      const result = await connection.execute(
+        `SELECT id, username, password_hash, role, first_name, last_name 
+         FROM users WHERE username = :username`,
+        { username }
+      );
+
+      if (result.rows.length === 0) {
+        throw new Error('Invalid credentials');
+      }
+
+      const user = result.rows[0];
+      const isValid = await bcrypt.compare(password, user.password_hash);
+      
+      if (!isValid) {
+        throw new Error('Invalid credentials');
+      }
+
+      const token = jwt.sign(
+        { userId: user.id, role: user.role },
+        process.env.JWT_SECRET,
+        { expiresIn: '8h' }
+      );
+
+      return { token, user: { id: user.id, username: user.username, role: user.role } };
+    } finally {
+      await connection.close();
+    }
+  }
+
+  verifyToken(token) {
+    return jwt.verify(token, process.env.JWT_SECRET);
+  }
+}
+```
+
+### 3. **Version Management Service**
+
+```javascript
+// services/VersionService.js
+export class VersionService {
+  async createVersion(collectionId, versionNumber, versionNotes, createdBy) {
+    const connection = await db.getConnection();
+    try {
+      await connection.execute('BEGIN');
+      
+      // Insert new version
+      const versionResult = await connection.execute(
+        `INSERT INTO versions (collection_id, version_number, version_notes, created_by)
+         VALUES (:collectionId, :versionNumber, :versionNotes, :createdBy)
+         RETURNING id INTO :id`,
+        { collectionId, versionNumber, versionNotes, createdBy, id: { type: oracledb.NUMBER, dir: oracledb.BIND_OUT } }
+      );
+
+      const versionId = versionResult.outBinds.id[0];
+
+      // Copy content from latest published version (if exists)
+      await this.copyContentFromPreviousVersion(connection, collectionId, versionId);
+      
+      await connection.execute('COMMIT');
+      return versionId;
+    } catch (error) {
+      await connection.execute('ROLLBACK');
+      throw error;
+    } finally {
+      await connection.close();
+    }
+  }
+
+  async publishVersion(versionId, publishedBy) {
+    const connection = await db.getConnection();
+    try {
+      // Check if user has permission
+      const userRole = await this.getUserRole(publishedBy);
+      if (!['Director', 'Administrator'].includes(userRole)) {
+        throw new Error('Insufficient permissions to publish');
+      }
+
+      // Check if already published
+      const versionCheck = await connection.execute(
+        `SELECT is_published FROM versions WHERE id = :versionId`,
+        { versionId }
+      );
+
+      if (versionCheck.rows[0]?.is_published === 'Y') {
+        throw new Error('Version already published');
+      }
+
+      // Publish version (one-time only)
+      await connection.execute(
+        `UPDATE versions 
+         SET is_published = 'Y', published_by = :publishedBy, published_at = CURRENT_TIMESTAMP
+         WHERE id = :versionId`,
+        { versionId, publishedBy }
+      );
+
+      await connection.execute('COMMIT');
+    } finally {
+      await connection.close();
+    }
+  }
+
+  async approveVersion(versionId, approvedBy) {
+    const connection = await db.getConnection();
+    try {
+      // Only super admin (Director) can approve
+      const userRole = await this.getUserRole(approvedBy);
+      if (userRole !== 'Director') {
+        throw new Error('Only Directors can approve versions');
+      }
+
+      await connection.execute(
+        `UPDATE versions 
+         SET is_approved = 'Y', approved_by = :approvedBy, approved_at = CURRENT_TIMESTAMP
+         WHERE id = :versionId AND is_published = 'Y'`,
+        { versionId, approvedBy }
+      );
+
+      await connection.execute('COMMIT');
+    } finally {
+      await connection.close();
+    }
+  }
+
+  async getPublishedVersions(collectionId) {
+    const connection = await db.getConnection();
+    try {
+      const result = await connection.execute(
+        `SELECT v.*, u1.first_name || ' ' || u1.last_name as created_by_name,
+                u2.first_name || ' ' || u2.last_name as published_by_name
+         FROM versions v
+         LEFT JOIN users u1 ON v.created_by = u1.id
+         LEFT JOIN users u2 ON v.published_by = u2.id
+         WHERE v.collection_id = :collectionId AND v.is_published = 'Y'
+         ORDER BY v.created_at DESC`,
+        { collectionId }
+      );
+      return result.rows;
+    } finally {
+      await connection.close();
+    }
+  }
+}
+```
+
+## 🎨 Frontend Architecture
+
+### 1. **Version Selector in Navbar**
+
+```jsx
+// src/components/VersionSelector/index.jsx
+import React, { useState, useEffect } from 'react';
+import { useLocation, useHistory } from '@docusaurus/router';
+
+export const VersionSelector = () => {
+  const [versions, setVersions] = useState([]);
+  const [currentVersion, setCurrentVersion] = useState('latest');
+  const location = useLocation();
+  const history = useHistory();
+
+  useEffect(() => {
+    fetchPublishedVersions();
+  }, []);
+
+  const fetchPublishedVersions = async () => {
+    try {
+      const response = await fetch('/api/versions/published');
+      const data = await response.json();
+      setVersions(data);
+    } catch (error) {
+      console.error('Failed to fetch versions:', error);
+    }
+  };
+
+  const handleVersionChange = (newVersion) => {
+    setCurrentVersion(newVersion);
+    // Update URL with version parameter
+    const newPath = `${location.pathname}?version=${newVersion}`;
+    history.push(newPath);
+    
+    // Trigger content reload
+    window.location.reload();
+  };
+
+  return (
+    <div className="version-selector-navbar">
+      <select 
+        value={currentVersion}
+        onChange={(e) => handleVersionChange(e.target.value)}
+        className="version-dropdown"
+      >
+        {versions.map(version => (
+          <option key={version.id} value={version.version_number}>
+            {version.version_number}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+};
+```
+
+### 2. **Admin Login Page**
+
+```jsx
+// src/pages/admin/login.jsx
+import React, { useState } from 'react';
+import Layout from '@theme/Layout';
+
+export default function AdminLogin() {
+  const [credentials, setCredentials] = useState({ username: '', password: '' });
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(credentials)
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        localStorage.setItem('token', data.token);
+        localStorage.setItem('user', JSON.stringify(data.user));
+        window.location.href = '/admin';
+      } else {
+        setError(data.error || 'Login failed');
+      }
+    } catch (error) {
+      setError('Network error. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Layout title="Admin Login">
+      <div className="admin-login">
+        <form onSubmit={handleLogin} className="login-form">
+          <h2>Admin Login</h2>
+          
+          {error && <div className="error-message">{error}</div>}
+          
+          <div className="form-group">
+            <label>Username:</label>
+            <input
+              type="text"
+              value={credentials.username}
+              onChange={(e) => setCredentials({...credentials, username: e.target.value})}
+              required
+            />
+          </div>
+          
+          <div className="form-group">
+            <label>Password:</label>
+            <input
+              type="password"
+              value={credentials.password}
+              onChange={(e) => setCredentials({...credentials, password: e.target.value})}
+              required
+            />
+          </div>
+          
+          <button type="submit" disabled={loading}>
+            {loading ? 'Logging in...' : 'Login'}
+          </button>
+        </form>
+      </div>
+    </Layout>
+  );
+}
+```
+
+### 3. **Version Management Admin Panel**
+
+```jsx
+// src/components/Admin/VersionManagement/index.jsx
+import React, { useState, useEffect } from 'react';
+
+export const VersionManagement = () => {
+  const [versions, setVersions] = useState([]);
+  const [selectedCollection, setSelectedCollection] = useState('docs');
+  const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    const userData = localStorage.getItem('user');
+    if (userData) {
+      setUser(JSON.parse(userData));
+    }
+    fetchVersions();
+  }, [selectedCollection]);
+
+  const fetchVersions = async () => {
+    try {
+      const response = await fetch(`/api/admin/versions/${selectedCollection}`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const data = await response.json();
+      setVersions(data);
+    } catch (error) {
+      console.error('Failed to fetch versions:', error);
+    }
+  };
+
+  const handlePublish = async (versionId) => {
+    try {
+      await fetch(`/api/admin/versions/${versionId}/publish`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      fetchVersions(); // Refresh list
+    } catch (error) {
+      console.error('Failed to publish version:', error);
+    }
+  };
+
+  const handleApprove = async (versionId) => {
+    try {
+      await fetch(`/api/admin/versions/${versionId}/approve`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      fetchVersions(); // Refresh list
+    } catch (error) {
+      console.error('Failed to approve version:', error);
+    }
+  };
+
+  const isDirector = user?.role === 'Director';
+  const canPublish = ['Director', 'Administrator'].includes(user?.role);
+
+  return (
+    <div className="version-management">
+      <h2>Version Management</h2>
+      
+      <div className="collection-selector">
+        <label>Collection:</label>
+        <select 
+          value={selectedCollection}
+          onChange={(e) => setSelectedCollection(e.target.value)}
+        >
+          <option value="docs">Documentation</option>
+          <option value="blog">Blog Posts</option>
+          <option value="pages">Pages</option>
+        </select>
+      </div>
+
+      <div className="versions-list">
+        {versions.map(version => (
+          <div key={version.id} className="version-card">
+            <div className="version-header">
+              <h3>{version.version_number}</h3>
+              <div className="version-status">
+                {version.is_published === 'Y' && <span className="badge published">Published</span>}
+                {version.is_approved === 'Y' && <span className="badge approved">Approved</span>}
+              </div>
+            </div>
+            
+            <div className="version-details">
+              <p><strong>Created by:</strong> {version.created_by_name}</p>
+              <p><strong>Notes:</strong> {version.version_notes}</p>
+              {version.published_at && (
+                <p><strong>Published:</strong> {new Date(version.published_at).toLocaleDateString()}</p>
+              )}
+            </div>
+
+            <div className="version-actions">
+              {version.is_published === 'N' && canPublish && (
+                <button onClick={() => handlePublish(version.id)} className="btn-publish">
+                  Publish
+                </button>
+              )}
+              
+              {version.is_published === 'Y' && version.is_approved === 'N' && isDirector && (
+                <button onClick={() => handleApprove(version.id)} className="btn-approve">
+                  Approve
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+```
+
+## 🔧 Implementation Steps
+
+### Phase 1: Database & Authentication (Week 1)
+1. Set up Oracle database with tables
+2. Create user authentication system
+3. Implement JWT token management
+4. Set up basic API structure
+
+### Phase 2: Version Management Backend (Week 2)
+1. Build version creation/management APIs
+2. Implement publish/approve workflows
+3. Create audit logging system
+4. Test one-time publish constraint
+
+### Phase 3: Admin Panel Integration (Week 3)
+1. Add login page to TinaCMS admin
+2. Create version management tab
+3. Implement role-based UI controls
+4. Add version creation from existing versions
+
+### Phase 4: Frontend Integration (Week 4)
+1. Add version selector to navbar
+2. Modify content loading to use versions
+3. Implement version-based routing
+4. Add content editing restrictions for published versions
+
+### Phase 5: Testing & Refinement (Week 5)
+1. Test all user roles and permissions
+2. Verify one-time publish constraints
+3. Test version creation workflows
+4. Performance optimization
+
+## 📦 Required Dependencies
+
+```json
+{
+  "dependencies": {
+    "oracledb": "^6.0.0",
+    "jsonwebtoken": "^9.0.0",
+    "bcrypt": "^5.1.0",
+    "express": "^4.18.0",
+    "cors": "^2.8.5",
+    "helmet": "^6.0.0",
+    "express-rate-limit": "^6.7.0"
+  }
+}
+```
+
+This architecture provides:
+- ✅ **Collection-level versioning** (not file-level)
+- ✅ **Role-based access control** with 3 user types
+- ✅ **One-time publish workflow** with approval system
+- ✅ **Oracle database integration** with proper relationships
+- ✅ **JWT authentication** with session management
+- ✅ **Audit trail** for all changes
+- ✅ **Frontend version selector** in navbar
+- ✅ **Admin panel integration** with TinaCMS
+
+Would you like me to start implementing any specific part of this architecture?
