@@ -1,0 +1,81 @@
+{
+  "tutorialSidebar": [
+    {
+      "type": "doc",
+      "id": "intro"
+    },
+    {
+      "type": "category",
+      "label": "Tutorial - Basics",
+      "link": {
+        "type": "generated-index"
+      },
+      "items": [
+        {
+          "type": "doc",
+          "id": "tutorial-basics/create-a-page"
+        },
+        {
+          "type": "doc",
+          "id": "tutorial-basics/create-a-document"
+        },
+        {
+          "type": "doc",
+          "id": "tutorial-basics/create-a-blog-post"
+        },
+        {
+          "type": "doc",
+          "id": "tutorial-basics/deploy-your-site"
+        },
+        {
+          "type": "doc",
+          "id": "tutorial-basics/congratulations"
+        }
+      ]
+    },
+    {
+      "type": "category",
+      "label": "Tutorial - Extras",
+      "link": {
+        "type": "generated-index"
+      },
+      "items": [
+        {
+          "type": "doc",
+          "id": "tutorial-extras/manage-docs-versions"
+        },
+        {
+          "type": "doc",
+          "id": "tutorial-extras/translate-your-site"
+        }
+      ]
+    },
+    {
+      "type": "category",
+      "label": "Nested Link",
+      "items": [
+        {
+          "type": "category",
+          "label": "Level 2",
+          "items": [
+            {
+              "type": "category",
+              "label": "Level 3",
+              "items": [
+                {
+                  "type": "doc",
+                  "id": "test-page"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "link",
+      "label": "Tina.io",
+      "href": "https://tina.io/"
+    }
+  ]
+}

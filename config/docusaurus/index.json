@@ -78,6 +78,11 @@
             "_template": "blog"
           },
           {
+            "label": "Versions",
+            "to": "versions",
+            "_template": "internal"
+          },
+          {
             "label": "GitHub",
             "href": "https://github.com/facebook/docusaurus",
             "_template": "external"

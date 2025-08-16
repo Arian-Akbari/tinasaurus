@@ -134,9 +134,24 @@ const config = {
             ? docusaurusData?.logo?.src
             : "img/logo.svg",
         },
-        items: docusaurusData.navbar.map((item) => {
-          return formatNavbarItem(item);
-        }),
+        items: [
+          // Add the version dropdown first
+          {
+            type: "docsVersionDropdown",
+            position: "right",
+            dropdownActiveClassDisabled: true,
+            // Add custom version labels
+            versions: {
+              current: { label: "v2.1.0" },
+              "2.0": { label: "v2.0.0" },
+              1.5: { label: "v1.5.0" },
+            },
+          },
+          // Then add the rest of the navbar items
+          ...docusaurusData.navbar.map((item) => {
+            return formatNavbarItem(item);
+          }),
+        ],
       },
       footer: {
         style: docusaurusData.footer?.style || "dark",
